@@ -276,27 +276,38 @@ public:
 	}
 
 	// iterated error state EKF propogation
+	// 迭代误差状态EKF传播
+	//这里的参数均从use-ikfom中传入
 	void predict(double &dt, processnoisecovariance &Q, const input &i_in){
+		// f函数对应use-ikfom.hpp中的 get_f函数，对应fast_lio2论文公式(2)
 		flatted_state f_ = f(x_, i_in);
-		cov_ f_x_ = f_x(x_, i_in);
-		cov f_x_final;
+		// 对应use-ikfom.hpp中的 df_dx函数
+        // 对应fast_lio2论文公式(7)
+		cov_ f_x_ = f_x(x_, i_in);		// m*n
+		cov f_x_final;					// n*n
 
+		// 对应use-ikfom.hpp中的 df_dw函数
+        // 对应fast_lio2论文公式(7)
 		Matrix<scalar_type, m, process_noise_dof> f_w_ = f_w(x_, i_in);
 		Matrix<scalar_type, n, process_noise_dof> f_w_final;
-		state x_before = x_;
+		state x_before = x_;		//保存x_的值，用于后面的更新
+
+		// 对应fast_lio2论文公式(2)  //这个是公式2的整个函数，用于更新x的
 		x_.oplus(f_, dt);
 
-		F_x1 = cov::Identity();
+		F_x1 = cov::Identity();		//状态转移矩阵
 		for (std::vector<std::pair<std::pair<int, int>, int> >::iterator it = x_.vect_state.begin(); it != x_.vect_state.end(); it++) {
-			int idx = (*it).first.first;
-			int dim = (*it).first.second;
-			int dof = (*it).second;
+			int idx = (*it).first.first;			//状态变量的索引
+			int dim = (*it).first.second;			//状态变量的维度
+			int dof = (*it).second;					//状态变量的自由度
 			for(int i = 0; i < n; i++){
 				for(int j=0; j<dof; j++)
+				//更新f_x_final，形成n*n阵，用于更新
 				{f_x_final(idx+j, i) = f_x_(dim+j, i);}	
 			}
 			for(int i = 0; i < process_noise_dof; i++){
 				for(int j=0; j<dof; j++)
+				//更新f_w_final，形成n*dof，用于更新
 				{f_w_final(idx+j, i) = f_w_(dim+j, i);}
 			}
 		}
@@ -1616,12 +1627,14 @@ public:
 	}
 	
 	//iterated error state EKF update modified for one specific system.
+	// 迭代错误状态EKF更新修改为一个特定的系统
 	void update_iterated_dyn_share_modified(double R, double &solve_time) {
 		
 		dyn_share_datastruct<scalar_type> dyn_share;
 		dyn_share.valid = true;
 		dyn_share.converge = true;
 		int t = 0;
+		//获取上一次的状态和协方差矩阵
 		state x_propagated = x_;
 		cov P_propagated = P_;
 		int dof_Measurement; 
@@ -1630,9 +1643,11 @@ public:
 		Matrix<scalar_type, n, n> K_x; 
 		
 		vectorized_state dx_new = vectorized_state::Zero();
+		// 最多进行maximum_iter次迭代优化
 		for(int i=-1; i<maximum_iter; i++)
 		{
 			dyn_share.valid = true;	
+			// 计算测量模型方程的雅克比，也就是点面残差的导数 H(代码里是h_x)
 			h_dyn_share(x_, dyn_share);
 
 			if(! dyn_share.valid)
@@ -1644,18 +1659,21 @@ public:
 			#ifdef USE_sparse
 				spMt h_x_ = dyn_share.h_x.sparseView();
 			#else
+				// 获取测量模型的雅克比d(pos, rot, 0, 0)/dx
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, 12> h_x_ = dyn_share.h_x;
 			#endif
 			double solve_start = omp_get_wtime();
-			dof_Measurement = h_x_.rows();
-			vectorized_state dx;
-			x_.boxminus(dx, x_propagated);
-			dx_new = dx;
+			dof_Measurement = h_x_.rows();		// 观测方程个数m
+			vectorized_state dx;				// 定义误差状态
+			x_.boxminus(dx, x_propagated);		//获取误差dx
+			dx_new = dx;						// 用于迭代的误差状态
 			
 			
-			
+			// 预测得到的误差状态协方差矩阵
+            //协方差矩阵在迭代过程中不会代入下一次迭代，直到最后一次退出时更新，在迭代过程中更新的只是先验
 			P_ = P_propagated;
-			
+
+			// 这一大段都在求协方差的先验更新，大致上是P=(J^-1)*P*(J^-T)如论文式16~18
 			Matrix<scalar_type, 3, 3> res_temp_SO3;
 			MTK::vect<3, scalar_type> seg_SO3;
 			for (std::vector<std::pair<int, int> >::iterator it = x_.SO3_state.begin(); it != x_.SO3_state.end(); it++) {
@@ -1712,6 +1730,8 @@ public:
 			}
 			*/
 
+			// 状态维度 n > 测量维度 dof_Measurement
+            // 如果状态量维度大于观测方程 n > m，不满秩
 			if(n > dof_Measurement)
 			{
 			//#ifdef USE_sparse
@@ -1719,6 +1739,7 @@ public:
 				//spMt R_temp = h_v * R_ * h_v.transpose();
 				//K_temp += R_temp;
 				Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> h_x_cur = Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic>::Zero(dof_Measurement, n);
+				//每一次迭代将重新计算增益K，即论文式18
 				h_x_cur.topLeftCorner(dof_Measurement, 12) = h_x_;
 				/*
 				h_x_cur.col(0) = h_x_.col(0);
@@ -1734,7 +1755,7 @@ public:
 				h_x_cur.col(10) = h_x_.col(10);
 				h_x_cur.col(11) = h_x_.col(11);
 				*/
-				
+				// 重新计算增益矩阵K
 				Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> K_ = P_ * h_x_cur.transpose() * (h_x_cur * P_ * h_x_cur.transpose()/R + Eigen::Matrix<double, Dynamic, Dynamic>::Identity(dof_Measurement, dof_Measurement)).inverse()/R;
 				K_h = K_ * dyn_share.h;
 				K_x = K_ * h_x_cur;
@@ -1744,6 +1765,7 @@ public:
 			}
 			else
 			{
+				//避免求逆矩阵，K按稀疏矩阵分解的方法如论文式20
 			#ifdef USE_sparse
 				//Eigen::Matrix<scalar_type, n, n> b = Eigen::Matrix<scalar_type, n, n>::Identity();
 				//Eigen::SparseQR<Eigen::SparseMatrix<scalar_type>, Eigen::COLAMDOrdering<int>> solver; 
@@ -1812,10 +1834,14 @@ public:
 			}
 
 			//K_x = K_ * h_x_;
+			//由于是误差迭代KF，得到的是误差的最优估计！
+			//误差增量后验 K*h + (K*H - I) dx
 			Matrix<scalar_type, n, 1> dx_ = K_h + (K_x - Matrix<scalar_type, n, n>::Identity()) * dx_new; 
-			state x_before = x_;
-			x_.boxplus(dx_);
+			state x_before = x_;		 // 加上校正后的误差状态dx_
+			x_.boxplus(dx_);			 //根据计算得到的误差增量后验，更新状态量	
+			 // 判断迭代是否发散
 			dyn_share.converge = true;
+			//判断已收敛的条件是误差的估计值小于阈值
 			for(int i = 0; i < n ; i++)
 			{
 				if(std::fabs(dx_[i]) > limit[i])
@@ -1831,6 +1857,8 @@ public:
 				dyn_share.converge = true;
 			}
 
+			// 迭代完成后更新误差状态协方差矩阵
+            //结束迭代后，更新协方差矩阵的后验值，大致上是P=(I-K*H)*P，如论文式19
 			if(t > 1 || i == maximum_iter - 1)
 			{
 				L_ = P_;

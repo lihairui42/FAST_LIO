@@ -17,10 +17,9 @@ mapping:
     det_range:     450.0
     extrinsic_est_en:  false        # true: enable the online estimation of IMU-LiDAR extrinsic
     extrinsic_T: [ -0.032, 0.012, 0.105 ]
-    extrinsic_R: [ 0, -1,  0,
-                   0,  0, -1,
-                   1,  0,  0]
-
+    extrinsic_R: [0.0,   -1.0,  0.0,
+                  0.0,    0.0,  1.0,
+                 -1.0,    0.0,   0.0 ]
 publish:
     path_en:  false
     scan_publish_en:  true          # false: close all the point cloud output

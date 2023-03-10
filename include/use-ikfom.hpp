@@ -44,46 +44,65 @@ MTK::get_cov<process_noise_ikfom>::type process_noise_cov()
 
 //double L_offset_to_I[3] = {0.04165, 0.02326, -0.0284}; // Avia 
 //vect3 Lidar_offset_to_IMU(L_offset_to_I, 3);
+// fast_lio2论文公式(2), 起始这里的f就是将imu的积分方程组成矩阵形式然后再去计算
+// 状态传递
 Eigen::Matrix<double, 24, 1> get_f(state_ikfom &s, const input_ikfom &in)
 {
+	// 将imu积分方程矩阵初始化为0,这里的24个对应了
+	//速度(3)
+	//角速度(3)
+	//外参偏置T(3)
+	//外参偏置R(3)
+	//加速度(3)
+	//角速度偏置(3)
+	//加速度偏置(3)
+	//位置(3)，与论文公式不一致
 	Eigen::Matrix<double, 24, 1> res = Eigen::Matrix<double, 24, 1>::Zero();
 	vect3 omega;
-	in.gyro.boxminus(omega, s.bg);
-	vect3 a_inertial = s.rot * (in.acc-s.ba); 
+	in.gyro.boxminus(omega, s.bg);		// 得到imu的角速度
+	vect3 a_inertial = s.rot * (in.acc-s.ba); 		// 加速度转到世界坐标系		
 	for(int i = 0; i < 3; i++ ){
-		res(i) = s.vel[i];
-		res(i + 3) =  omega[i]; 
-		res(i + 12) = a_inertial[i] + s.grav[i]; 
+		res(i) = s.vel[i];							//更新的速度
+		res(i + 3) =  omega[i]; 					//更新的角速度
+		res(i + 12) = a_inertial[i] + s.grav[i]; 	//更新的加速度
 	}
 	return res;
 }
 
+//状态传递矩阵
+// 对应fast_lio2论文公式(7)
 Eigen::Matrix<double, 24, 23> df_dx(state_ikfom &s, const input_ikfom &in)
 {
+	//当中的23个对应了status的维度计算，为
+	//pos(3), rot(3), offset_R_L_I(3), offset_T_L_I(3), vel(3), bg(3), ba(3), grav(2);
+	//这一块和fast-lio不同需要注意
 	Eigen::Matrix<double, 24, 23> cov = Eigen::Matrix<double, 24, 23>::Zero();
-	cov.template block<3, 3>(0, 12) = Eigen::Matrix3d::Identity();
+	cov.template block<3, 3>(0, 12) = Eigen::Matrix3d::Identity();		//一开始是一个R3的单位阵，代表速度转移
 	vect3 acc_;
-	in.acc.boxminus(acc_, s.ba);
+	in.acc.boxminus(acc_, s.ba);		//拿到加速度
 	vect3 omega;
-	in.gyro.boxminus(omega, s.bg);
+	in.gyro.boxminus(omega, s.bg);		 //拿到角速度	
+	//这里的-s.rot.toRotationMatrix()是因为论文中的矩阵是逆时针旋转的	
 	cov.template block<3, 3>(12, 3) = -s.rot.toRotationMatrix()*MTK::hat(acc_);
+	// 将角度转到存入的矩阵中（应该与上面颠倒了）
 	cov.template block<3, 3>(12, 18) = -s.rot.toRotationMatrix();
 	Eigen::Matrix<state_ikfom::scalar, 2, 1> vec = Eigen::Matrix<state_ikfom::scalar, 2, 1>::Zero();
 	Eigen::Matrix<state_ikfom::scalar, 3, 2> grav_matrix;
-	s.S2_Mx(grav_matrix, vec, 21);
-	cov.template block<3, 2>(12, 21) =  grav_matrix; 
-	cov.template block<3, 3>(3, 15) = -Eigen::Matrix3d::Identity(); 
+	s.S2_Mx(grav_matrix, vec, 21);		//将vec的2*1矩阵转为grav_matrix的3*2矩阵
+	cov.template block<3, 2>(12, 21) =  grav_matrix; 		//存入到矩阵中
+	cov.template block<3, 3>(3, 15) = -Eigen::Matrix3d::Identity(); 	//角速度存入
 	return cov;
 }
 
-
+//状态噪声矩阵
+// 对应fast_lio2论文公式(7)
 Eigen::Matrix<double, 24, 12> df_dw(state_ikfom &s, const input_ikfom &in)
 {
 	Eigen::Matrix<double, 24, 12> cov = Eigen::Matrix<double, 24, 12>::Zero();
-	cov.template block<3, 3>(12, 3) = -s.rot.toRotationMatrix();
-	cov.template block<3, 3>(3, 0) = -Eigen::Matrix3d::Identity();
-	cov.template block<3, 3>(15, 6) = Eigen::Matrix3d::Identity();
-	cov.template block<3, 3>(18, 9) = Eigen::Matrix3d::Identity();
+	cov.template block<3, 3>(12, 3) = -s.rot.toRotationMatrix();			//加速度
+	cov.template block<3, 3>(3, 0) = -Eigen::Matrix3d::Identity();			//角速度
+	cov.template block<3, 3>(15, 6) = Eigen::Matrix3d::Identity();			//角速度偏置
+	cov.template block<3, 3>(18, 9) = Eigen::Matrix3d::Identity();			//加速度偏置
 	return cov;
 }
 
